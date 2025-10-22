@@ -70,18 +70,47 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
   const [error, setError] = useState<string | null>(null);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResultData | null>(null);
   const [showCameraGuide, setShowCameraGuide] = useState(false);
-  const [isSlowMo, setIsSlowMo] = useState(false);
+  
+  const [isHighFpsRequested, setIsHighFpsRequested] = useState(false);
+  const [isPlaybackSlowed, setIsPlaybackSlowed] = useState(false);
   const [actualFps, setActualFps] = useState<number | null>(null);
+  
+  const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
+  const [selectedDeviceId, setSelectedDeviceId] = useState<string | undefined>(undefined);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
   useEffect(() => {
+    // This effect runs once to get the list of available video devices.
+    const getVideoDevices = async () => {
+      try {
+        // We must call getUserMedia to get permission before enumerateDevices can return device labels.
+        // We can create a dummy stream and stop it immediately.
+        const tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
+        tempStream.getTracks().forEach(track => track.stop());
+        
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoInputs = devices.filter(device => device.kind === 'videoinput');
+        setVideoDevices(videoInputs);
+        if (videoInputs.length > 0) {
+          // Default to the first available camera.
+          setSelectedDeviceId(videoInputs[0].deviceId);
+        }
+      } catch (err) {
+        console.warn("Could not enumerate video devices:", err);
+        // Don't set an error here; it will be handled when the user tries to record.
+      }
+    };
+    getVideoDevices();
+  }, []);
+
+  useEffect(() => {
     if (videoRef.current && videoBlobUrl) {
-      videoRef.current.playbackRate = isSlowMo ? 0.25 : 1.0;
+      videoRef.current.playbackRate = isPlaybackSlowed ? 0.25 : 1.0;
     }
-  }, [isSlowMo, videoBlobUrl]);
+  }, [isPlaybackSlowed, videoBlobUrl]);
 
   const startRecording = async () => {
     setVideoBlobUrl(null);
@@ -89,15 +118,31 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
     setAnalysisResult(null);
     setError(null);
     setActualFps(null);
-    setIsSlowMo(false);
+    setIsPlaybackSlowed(false);
 
     try {
-      const constraints = { 
+      const frameRateConstraint = isHighFpsRequested
+        ? { ideal: 240, min: 60 }
+        : { ideal: 30 };
+
+      const constraints: MediaStreamConstraints = { 
         video: { 
-          facingMode: 'environment',
-          frameRate: { ideal: 120, min: 30 } 
+          deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined,
+          frameRate: frameRateConstraint
         } 
       };
+      
+      // Fallback to 'environment' facing mode if no specific device is selected.
+      // FIX: Add a type guard to ensure `constraints.video` is an object before accessing its properties. This resolves the TypeScript error where `constraints.video` could be a boolean.
+      if (typeof constraints.video === 'object' && !constraints.video.deviceId) {
+        constraints.video.facingMode = 'environment';
+      }
+      
+      // Fallback to 'environment' facing mode if no specific device is selected.
+      if (typeof constraints.video === 'object' && !constraints.video.deviceId) {
+        (constraints.video as MediaTrackConstraints).facingMode = 'environment';
+      }
+
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
       
       const videoTrack = stream.getVideoTracks()[0];
@@ -105,7 +150,7 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
         const settings = videoTrack.getSettings();
         if (settings.frameRate) {
             setActualFps(settings.frameRate);
-            console.log(`Camera stream started. Requested 120fps, got: ${settings.frameRate}fps`);
+            console.log(`Camera stream started. Requested FPS: ${JSON.stringify(frameRateConstraint)}, Actual FPS: ${settings.frameRate}`);
         }
       }
 
@@ -221,7 +266,7 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
     setError(null);
     setIsLoading(false);
     setActualFps(null);
-    setIsSlowMo(false);
+    setIsPlaybackSlowed(false);
     if(videoRef.current) {
         videoRef.current.src = "";
         videoRef.current.srcObject = null;
@@ -256,27 +301,61 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
         {error && <div className="text-red-400 bg-red-900/50 p-3 rounded-md text-center">{error}</div>}
 
         {!isLoading && !analysisResult && (
-            <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-                <ClubSelector selectedClub={selectedClub} onClubChange={setSelectedClub} disabled={isRecording}/>
-                {isRecording ? (
-                    <button onClick={stopRecording} className="w-full sm:w-auto bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-lg transition-colors">
-                        Stop Recording
+            isRecording ? (
+                 <button onClick={stopRecording} className="w-full sm:w-auto mx-auto bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-lg transition-colors">
+                    Stop Recording
+                </button>
+            ) : videoBlobUrl ? (
+                <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
+                    <button onClick={handleAnalyze} className="w-full sm:w-auto bg-golf-green hover:bg-golf-green-light text-white font-bold py-3 px-6 rounded-lg transition-colors">
+                        Analyze Swing
                     </button>
-                ) : videoBlobUrl ? (
-                    <>
-                        <button onClick={handleAnalyze} className="w-full sm:w-auto bg-golf-green hover:bg-golf-green-light text-white font-bold py-3 px-6 rounded-lg transition-colors">
-                            Analyze Swing
-                        </button>
-                        <button onClick={handleReset} className="w-full sm:w-auto bg-gray-600 hover:bg-gray-700 text-white font-bold py-3 px-6 rounded-lg transition-colors">
-                            Record New
-                        </button>
-                    </>
-                ) : (
+                    <button onClick={handleReset} className="w-full sm:w-auto bg-gray-600 hover:bg-gray-700 text-white font-bold py-3 px-6 rounded-lg transition-colors">
+                        Record New
+                    </button>
+                </div>
+            ) : (
+                <div className="flex flex-col items-center gap-4">
+                    {/* Pre-recording settings */}
+                    <div className="w-full flex flex-col sm:flex-row items-center justify-center gap-4 p-4 bg-dark-charcoal rounded-lg">
+                        <ClubSelector selectedClub={selectedClub} onClubChange={setSelectedClub} />
+                        
+                        {videoDevices.length > 1 && (
+                            <div className="w-full sm:w-auto">
+                                <select
+                                    value={selectedDeviceId}
+                                    onChange={(e) => setSelectedDeviceId(e.target.value)}
+                                    className="w-full sm:w-auto bg-light-gray border border-gray-600 text-white font-semibold py-3 px-4 rounded-lg focus:outline-none focus:ring-2 focus:ring-golf-green-light"
+                                    aria-label="Select Camera"
+                                >
+                                    {videoDevices.map((device, index) => (
+                                        <option key={device.deviceId} value={device.deviceId}>
+                                            {device.label || `Camera ${index + 1}`}
+                                        </option>
+                                    ))}
+                                </select>
+                            </div>
+                        )}
+                        
+                        <div className="flex items-center gap-2">
+                            <label htmlFor="highFpsToggle" className="text-sm text-gray-300 font-semibold whitespace-nowrap">High FPS (Slow-Mo):</label>
+                            <button
+                                id="highFpsToggle"
+                                onClick={() => setIsHighFpsRequested(!isHighFpsRequested)}
+                                className={`relative inline-flex items-center h-6 rounded-full w-11 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-dark-charcoal focus:ring-golf-green ${isHighFpsRequested ? 'bg-golf-green' : 'bg-gray-600'}`}
+                                role="switch"
+                                aria-checked={isHighFpsRequested}
+                            >
+                                <span className={`inline-block w-4 h-4 transform bg-white rounded-full transition-transform ${isHighFpsRequested ? 'translate-x-6' : 'translate-x-1'}`} />
+                            </button>
+                        </div>
+                    </div>
+
                     <button onClick={startRecording} className="w-full sm:w-auto bg-golf-green-light hover:bg-golf-green text-white font-bold py-3 px-6 rounded-lg transition-colors">
                         Start Recording
                     </button>
-                )}
-            </div>
+                </div>
+            )
         )}
         
         {videoBlobUrl && !analysisResult && !isLoading && (
@@ -287,20 +366,20 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
                     </div>
                 }
                 <div className="flex items-center gap-2">
-                    <label htmlFor="slowMoToggle" className="text-sm text-gray-300 font-semibold">Slow Motion:</label>
+                    <label htmlFor="playbackSlowMoToggle" className="text-sm text-gray-300 font-semibold">Slow Motion Playback:</label>
                     <button
-                      id="slowMoToggle"
-                      onClick={() => setIsSlowMo(!isSlowMo)}
+                      id="playbackSlowMoToggle"
+                      onClick={() => setIsPlaybackSlowed(!isPlaybackSlowed)}
                       className={`relative inline-flex items-center h-6 rounded-full w-11 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-light-gray focus:ring-golf-green ${
-                        isSlowMo ? 'bg-golf-green' : 'bg-gray-600'
+                        isPlaybackSlowed ? 'bg-golf-green' : 'bg-gray-600'
                       }`}
-                      aria-pressed={isSlowMo}
+                      aria-pressed={isPlaybackSlowed}
                       role="switch"
                     >
-                      <span className="sr-only">Toggle Slow Motion</span>
+                      <span className="sr-only">Toggle Slow Motion Playback</span>
                       <span
                         className={`inline-block w-4 h-4 transform bg-white rounded-full transition-transform ${
-                          isSlowMo ? 'translate-x-6' : 'translate-x-1'
+                          isPlaybackSlowed ? 'translate-x-6' : 'translate-x-1'
                         }`}
                       />
                     </button>
