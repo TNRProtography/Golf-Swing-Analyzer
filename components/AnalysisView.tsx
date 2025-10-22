@@ -20,6 +20,19 @@ const InformationCircleIcon = () => (
     </svg>
 );
 
+const ExpandIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M4 8V4m0 0h4M4 4l5 5m11-1V4m0 0h-4m4 0l-5 5M4 16v4m0 0h4m-4 0l5-5m11 1v4m0 0h-4m4 0l-5-5" />
+    </svg>
+);
+
+const ShrinkIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-6 w-6" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M10 14l-4 4m0 0v-4m0 4h4m10-10l-4-4m0 0v4m0-4h-4m-6 10l4-4m0 0v-4m0 4h-4m10 10l-4-4m0 0v-4m0 4h-4" />
+    </svg>
+);
+
+
 const CameraAngleGuide: React.FC<{ onClose: () => void }> = ({ onClose }) => (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={onClose}>
         <div className="bg-light-gray rounded-lg shadow-2xl p-6 w-full max-w-2xl animate-fade-in" onClick={(e) => e.stopPropagation()}>
@@ -77,10 +90,12 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
   
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | undefined>(undefined);
+  const [isFullscreen, setIsFullscreen] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  const videoContainerRef = useRef<HTMLDivElement>(null);
 
   useEffect(() => {
     // This effect runs once to get the list of available video devices.
@@ -111,6 +126,16 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
       videoRef.current.playbackRate = isPlaybackSlowed ? 0.25 : 1.0;
     }
   }, [isPlaybackSlowed, videoBlobUrl]);
+  
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      setIsFullscreen(!!document.fullscreenElement);
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => {
+      document.removeEventListener('fullscreenchange', handleFullscreenChange);
+    };
+  }, []);
 
   const startRecording = async () => {
     setVideoBlobUrl(null);
@@ -133,14 +158,8 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
       };
       
       // Fallback to 'environment' facing mode if no specific device is selected.
-      // FIX: Add a type guard to ensure `constraints.video` is an object before accessing its properties. This resolves the TypeScript error where `constraints.video` could be a boolean.
       if (typeof constraints.video === 'object' && !constraints.video.deviceId) {
         constraints.video.facingMode = 'environment';
-      }
-      
-      // Fallback to 'environment' facing mode if no specific device is selected.
-      if (typeof constraints.video === 'object' && !constraints.video.deviceId) {
-        (constraints.video as MediaTrackConstraints).facingMode = 'environment';
       }
 
       const stream = await navigator.mediaDevices.getUserMedia(constraints);
@@ -273,6 +292,21 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
     }
   }
 
+  const toggleFullscreen = () => {
+    if (!videoContainerRef.current) return;
+
+    if (!document.fullscreenElement) {
+        videoContainerRef.current.requestFullscreen().catch(err => {
+            alert(`Error attempting to enable full-screen mode: ${err.message} (${err.name})`);
+        });
+    } else {
+        if (document.exitFullscreen) {
+            document.exitFullscreen();
+        }
+    }
+  };
+
+
   return (
     <div className="bg-light-gray rounded-lg shadow-xl p-4 md:p-8 w-full max-w-4xl mx-auto flex flex-col gap-6">
         {showCameraGuide && <CameraAngleGuide onClose={() => setShowCameraGuide(false)} />}
@@ -281,7 +315,7 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
             <p className="text-gray-400 mt-1">Record your swing to get instant AI-powered feedback.</p>
         </div>
 
-        <div className="bg-dark-charcoal rounded-lg aspect-video w-full flex items-center justify-center overflow-hidden">
+        <div ref={videoContainerRef} className="relative bg-dark-charcoal rounded-lg aspect-video w-full flex items-center justify-center overflow-hidden">
             <video ref={videoRef} className="w-full h-full object-contain" playsInline autoPlay muted loop={!isRecording && !!videoBlobUrl}></video>
              {!videoBlobUrl && !isRecording && (
                 <div className="absolute flex flex-col items-center text-center p-4">
@@ -295,6 +329,15 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
                         </button>
                     </div>
                 </div>
+            )}
+            {(isRecording || videoBlobUrl) && (
+                <button 
+                    onClick={toggleFullscreen} 
+                    className="absolute bottom-2 right-2 p-2 bg-black/50 rounded-full text-white hover:bg-black/75 transition-colors z-10"
+                    aria-label={isFullscreen ? "Exit Fullscreen" : "Enter Fullscreen"}
+                >
+                    {isFullscreen ? <ShrinkIcon /> : <ExpandIcon />}
+                </button>
             )}
         </div>
 

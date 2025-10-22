@@ -12,13 +12,37 @@ import { fetchSwingsFromCloud, saveSwingToCloud } from './services/cloudService'
 
 const LOCAL_STORAGE_KEY = 'golf-swings';
 
+// Define the interface for the BeforeInstallPromptEvent
+interface BeforeInstallPromptEvent extends Event {
+  readonly platforms: Array<string>;
+  readonly userChoice: Promise<{
+    outcome: 'accepted' | 'dismissed',
+    platform: string,
+  }>;
+  prompt(): Promise<void>;
+}
+
 const App: React.FC = () => {
   const [swings, setSwings] = useState<SwingData[]>([]);
   const [currentView, setCurrentView] = useState<View>(VIEWS.ANALYSIS);
   const [toastMessage, setToastMessage] = useState<string>('');
   const [isLoading, setIsLoading] = useState<boolean>(true);
+  const [installPromptEvent, setInstallPromptEvent] = useState<BeforeInstallPromptEvent | null>(null);
 
   const userId = useUserId();
+
+  useEffect(() => {
+    const handleBeforeInstallPrompt = (e: Event) => {
+      e.preventDefault();
+      setInstallPromptEvent(e as BeforeInstallPromptEvent);
+    };
+
+    window.addEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+
+    return () => {
+      window.removeEventListener('beforeinstallprompt', handleBeforeInstallPrompt);
+    };
+  }, []);
 
   useEffect(() => {
     let localSwings: SwingData[] = [];
@@ -66,9 +90,25 @@ const App: React.FC = () => {
     }
   };
 
+  const handleInstallClick = async () => {
+    if (!installPromptEvent) {
+      return;
+    }
+    installPromptEvent.prompt();
+    const { outcome } = await installPromptEvent.userChoice;
+    console.log(`Install prompt outcome: ${outcome}`);
+    // The event can only be used once.
+    setInstallPromptEvent(null);
+  };
+
   return (
     <div className="min-h-screen bg-dark-charcoal font-sans flex flex-col">
-      <Header currentView={currentView} setCurrentView={setCurrentView} />
+      <Header 
+        currentView={currentView} 
+        setCurrentView={setCurrentView}
+        installPromptEvent={installPromptEvent}
+        onInstallClick={handleInstallClick}
+      />
       <main className="flex-grow container mx-auto p-4 md:p-6">
         {currentView === VIEWS.ANALYSIS && <AnalysisView addSwing={addSwing} />}
         {currentView === VIEWS.HISTORY && <ShotHistoryView swings={swings} isLoading={isLoading} />}
