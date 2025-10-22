@@ -1,0 +1,7 @@
+{
+  "name": "Golf Swing Analyzer AI",
+  "description": "An AI-powered golf swing companion to analyze your swing, track your shots, and provide personalized tips for improvement. Record your swing, get detailed stats, and visualize your performance over time.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
