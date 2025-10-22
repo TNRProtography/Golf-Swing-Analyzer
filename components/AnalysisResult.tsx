@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { StatCard } from './StatCard';
 import { AVERAGE_CARRY_DISTANCES } from '../constants';
@@ -9,16 +8,16 @@ interface AnalysisResultProps {
   onReset: () => void;
 }
 
-const TrajectoryOverlay: React.FC<{ trajectory: {x: number, y: number}[], posterUrl: string }> = ({ trajectory, posterUrl }) => {
+const TrajectoryOverlay: React.FC<{ trajectory: {x: number, y: number}[], impactFrameUrl: string }> = ({ trajectory, impactFrameUrl }) => {
     if (!trajectory || trajectory.length < 2) {
-        return <img src={posterUrl} alt="Golf Swing" className="w-full h-full object-contain rounded-lg" />;
+        return <img src={impactFrameUrl} alt="Golf Swing Impact" className="w-full h-full object-contain rounded-lg" />;
     }
 
     const points = trajectory.map(p => `${p.x * 100}% ${p.y * 100}%`).join(' ');
 
     return (
         <div className="relative w-full h-full">
-            <img src={posterUrl} alt="Golf Swing" className="w-full h-full object-contain rounded-lg" />
+            <img src={impactFrameUrl} alt="Golf Swing Impact" className="w-full h-full object-contain rounded-lg" />
             <svg className="absolute top-0 left-0 w-full h-full" viewBox="0 0 100 100" preserveAspectRatio="none">
                 <polyline
                     points={points.replace(/%/g, '')}
@@ -85,7 +84,7 @@ export const AnalysisResult: React.FC<AnalysisResultProps> = ({ result, onReset 
         <div className="bg-dark-charcoal p-4 rounded-lg">
           <h4 className="font-bold text-lg mb-2 text-gray-300">Swing & Ball Flight</h4>
           <div className="aspect-video w-full rounded-lg overflow-hidden">
-             <TrajectoryOverlay trajectory={result.trajectory} posterUrl={result.posterUrl} />
+             <TrajectoryOverlay trajectory={result.trajectory} impactFrameUrl={result.impactFrameUrl} />
           </div>
         </div>
         <div className="bg-dark-charcoal p-4 rounded-lg">

@@ -1,4 +1,3 @@
-
 import { CLUBS } from './constants';
 
 export type Club = typeof CLUBS[number];
@@ -18,8 +17,7 @@ export interface SwingStats {
 export interface SwingData {
   id: string;
   club: Club;
-  videoUrl: string;
-  posterUrl: string;
+  impactFrameUrl: string; // base64 data URL of the impact frame
   stats: SwingStats;
   trajectory: TrajectoryPoint[];
   tips: string[];

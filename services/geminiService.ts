@@ -1,4 +1,3 @@
-
 import { GoogleGenAI, Type } from "@google/genai";
 import type { SwingStats, TrajectoryPoint, Club } from '../types';
 
@@ -27,8 +26,9 @@ const analysisSchema = {
     clubHeadSpeed: { type: Type.NUMBER, description: "Estimated club head speed in mph." },
     launchAngle: { type: Type.NUMBER, description: "Estimated launch angle in degrees." },
     distance: { type: Type.NUMBER, description: "Estimated carry distance in yards." },
+    impactFrameIndex: { type: Type.NUMBER, description: "The 0-based index of the frame from the input sequence that best shows the moment of ball impact." },
   },
-  required: ["trajectory", "ballSpeed", "clubHeadSpeed", "launchAngle", "distance"],
+  required: ["trajectory", "ballSpeed", "clubHeadSpeed", "launchAngle", "distance", "impactFrameIndex"],
 };
 
 const coachingSchema = {
@@ -50,10 +50,10 @@ const dataUrlToPart = (dataUrl: string) => {
     return { inlineData: { mimeType, data: base64Data } };
 }
 
-export const analyzeSwing = async (frames: string[], club: Club): Promise<{ stats: SwingStats, trajectory: TrajectoryPoint[] }> => {
+export const analyzeSwing = async (frames: string[], club: Club): Promise<{ stats: SwingStats, trajectory: TrajectoryPoint[], impactFrameIndex: number }> => {
   const imageParts = frames.map(dataUrlToPart);
 
-  const prompt = `You are an expert golf swing analyzer. Analyze these sequential frames of a golf swing. The user is using a ${club}. Identify the ball's trajectory from impact. Provide the ball's path as an array of normalized {x, y} coordinates, where {x: 0, y: 0} is the top-left and {x: 1, y: 1} is the bottom-right. Also, estimate the key swing metrics. Return your response as a single JSON object.`;
+  const prompt = `You are an expert golf swing analyzer. Analyze these sequential frames of a golf swing. The user is using a ${club}. Identify the ball's trajectory from impact. Provide the ball's path as an array of normalized {x, y} coordinates, where {x: 0, y: 0} is the top-left and {x: 1, y: 1} is the bottom-right. Also, estimate the key swing metrics. Return your response as a single JSON object, including the 0-based index of the frame showing ball impact.`;
   
   const response = await ai.models.generateContent({
     model: 'gemini-2.5-flash',
@@ -75,11 +75,12 @@ export const analyzeSwing = async (frames: string[], club: Club): Promise<{ stat
       distance: result.distance,
     },
     trajectory: result.trajectory,
+    impactFrameIndex: result.impactFrameIndex,
   };
 };
 
-export const getCoachingTips = async (stats: SwingStats, club: Club, posterFrame: string): Promise<string[]> => {
-    const imagePart = dataUrlToPart(posterFrame);
+export const getCoachingTips = async (stats: SwingStats, club: Club, impactFrame: string): Promise<string[]> => {
+    const imagePart = dataUrlToPart(impactFrame);
     const prompt = `You are an expert golf coach. Based on this image of the golfer's impact position and the following swing data, provide 3 concise, actionable tips for improvement. The golfer is using a ${club} and their stats are: Ball Speed: ${stats.ballSpeed} mph, Club Head Speed: ${stats.clubHeadSpeed} mph, Launch Angle: ${stats.launchAngle} degrees, Carry Distance: ${stats.distance} yards. Focus on common faults that lead to these numbers. Format the tips as a JSON object.`;
     
     const response = await ai.models.generateContent({

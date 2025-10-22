@@ -1,9 +1,10 @@
 
-import React, { useState, useRef, useCallback } from 'react';
+import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { ClubSelector } from './ClubSelector';
 import { Loader } from './Loader';
 import { AnalysisResult } from './AnalysisResult';
 import { analyzeSwing, getCoachingTips } from '../services/geminiService';
+import { saveVideo } from '../services/localDBService';
 import type { Club, SwingData, AnalysisResultData } from '../types';
 import { CLUBS } from '../constants';
 
@@ -13,6 +14,49 @@ const CameraIcon = () => (
     </svg>
 );
 
+const InformationCircleIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5 inline mr-1" viewBox="0 0 20 20" fill="currentColor">
+        <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zm-7-4a1 1 0 11-2 0 1 1 0 012 0zM9 9a1 1 0 000 2v3a1 1 0 001 1h1a1 1 0 100-2v-3a1 1 0 00-1-1H9z" clipRule="evenodd" />
+    </svg>
+);
+
+const CameraAngleGuide: React.FC<{ onClose: () => void }> = ({ onClose }) => (
+    <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={onClose}>
+        <div className="bg-light-gray rounded-lg shadow-2xl p-6 w-full max-w-2xl animate-fade-in" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center mb-4">
+                <h3 className="text-xl font-bold text-golf-sand">Camera Placement Guide</h3>
+                <button onClick={onClose} className="text-gray-400 hover:text-white">&times;</button>
+            </div>
+            <p className="text-gray-400 mb-6">For accurate AI analysis, camera position is key. Here are the two standard angles and why we recommend one over the other for this app.</p>
+            <div className="grid md:grid-cols-2 gap-6">
+                <div className="bg-dark-charcoal p-4 rounded-lg border border-golf-green">
+                    <h4 className="font-bold text-lg text-golf-green-light mb-2">Face-On (Recommended)</h4>
+                    <p className="text-sm text-gray-300 mb-3">Place the camera directly in front of you, facing your chest, level with your hands at address.</p>
+                    <ul className="text-xs space-y-2 list-disc list-inside">
+                        <li className="text-green-400"><strong>Pro:</strong> Best for analyzing body mechanics (rotation, weight shift).</li>
+                        <li className="text-green-400"><strong>Pro:</strong> Allows AI to accurately calculate club head speed and launch angle.</li>
+                        <li className="text-red-400"><strong>Con:</strong> Poor for seeing the ball's actual flight path.</li>
+                    </ul>
+                </div>
+                <div className="bg-dark-charcoal p-4 rounded-lg border border-gray-600">
+                    <h4 className="font-bold text-lg text-gray-300 mb-2">Down-the-Line</h4>
+                    <p className="text-sm text-gray-300 mb-3">Place the camera directly behind you, looking down the target line.</p>
+                     <ul className="text-xs space-y-2 list-disc list-inside">
+                        <li className="text-green-400"><strong>Pro:</strong> Excellent for seeing ball flight and swing path.</li>
+                        <li className="text-red-400"><strong>Con:</strong> Hard for AI to calculate speeds and angles from this 2D view.</li>
+                    </ul>
+                </div>
+            </div>
+             <div className="text-center mt-6">
+                <button onClick={onClose} className="bg-golf-green hover:bg-golf-green-light text-white font-bold py-2 px-6 rounded-lg transition-colors">
+                    Got it
+                </button>
+            </div>
+        </div>
+    </div>
+);
+
+
 interface AnalysisViewProps {
   addSwing: (swingData: SwingData) => void;
 }
@@ -20,21 +64,51 @@ interface AnalysisViewProps {
 export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
   const [selectedClub, setSelectedClub] = useState<Club>(CLUBS[0]);
   const [isRecording, setIsRecording] = useState(false);
+  const [videoBlob, setVideoBlob] = useState<Blob | null>(null);
   const [videoBlobUrl, setVideoBlobUrl] = useState<string | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [analysisResult, setAnalysisResult] = useState<AnalysisResultData | null>(null);
+  const [showCameraGuide, setShowCameraGuide] = useState(false);
+  const [isSlowMo, setIsSlowMo] = useState(false);
+  const [actualFps, setActualFps] = useState<number | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
 
+  useEffect(() => {
+    if (videoRef.current && videoBlobUrl) {
+      videoRef.current.playbackRate = isSlowMo ? 0.25 : 1.0;
+    }
+  }, [isSlowMo, videoBlobUrl]);
+
   const startRecording = async () => {
     setVideoBlobUrl(null);
+    setVideoBlob(null);
     setAnalysisResult(null);
     setError(null);
+    setActualFps(null);
+    setIsSlowMo(false);
+
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: 'environment' } });
+      const constraints = { 
+        video: { 
+          facingMode: 'environment',
+          frameRate: { ideal: 120, min: 30 } 
+        } 
+      };
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        const settings = videoTrack.getSettings();
+        if (settings.frameRate) {
+            setActualFps(settings.frameRate);
+            console.log(`Camera stream started. Requested 120fps, got: ${settings.frameRate}fps`);
+        }
+      }
+
       streamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
@@ -50,6 +124,7 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
       };
       recorder.onstop = () => {
         const blob = new Blob(chunks, { type: 'video/webm' });
+        setVideoBlob(blob);
         const url = URL.createObjectURL(blob);
         setVideoBlobUrl(url);
         if (videoRef.current) {
@@ -75,7 +150,7 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
     setIsRecording(false);
   };
   
-  const extractFrames = useCallback(async (videoUrl: string): Promise<{frames: string[], poster: string}> => {
+  const extractFrames = useCallback(async (videoUrl: string): Promise<string[]> => {
     return new Promise((resolve) => {
         const video = document.createElement('video');
         video.src = videoUrl;
@@ -84,8 +159,7 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
         const frames: string[] = [];
-        let poster = '';
-
+        
         video.onloadeddata = async () => {
             canvas.width = video.videoWidth;
             canvas.height = video.videoHeight;
@@ -99,41 +173,39 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
                 context?.drawImage(video, 0, 0, video.videoWidth, video.videoHeight);
                 const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
                 frames.push(dataUrl);
-                if (i === Math.floor(frameCount / 2)) { // Choose middle frame as poster
-                    poster = dataUrl;
-                }
             }
-            resolve({frames, poster});
+            resolve(frames);
         };
         video.load();
     });
   }, []);
 
   const handleAnalyze = async () => {
-    if (!videoBlobUrl) return;
+    if (!videoBlobUrl || !videoBlob) return;
 
     setIsLoading(true);
     setError(null);
     setAnalysisResult(null);
 
     try {
-        const { frames, poster } = await extractFrames(videoBlobUrl);
+        const frames = await extractFrames(videoBlobUrl);
         if (frames.length === 0) throw new Error("Could not extract frames from video.");
 
-        const { stats, trajectory } = await analyzeSwing(frames, selectedClub);
-        const tips = await getCoachingTips(stats, selectedClub, poster);
+        const { stats, trajectory, impactFrameIndex } = await analyzeSwing(frames, selectedClub);
+        const impactFrame = frames[impactFrameIndex];
+        const tips = await getCoachingTips(stats, selectedClub, impactFrame);
         
         const newSwing: SwingData = {
             id: new Date().toISOString(),
             club: selectedClub,
-            videoUrl: videoBlobUrl,
-            posterUrl: poster,
+            impactFrameUrl: impactFrame,
             stats,
             trajectory,
             tips,
             timestamp: Date.now(),
         };
-
+        
+        await saveVideo(newSwing.id, videoBlob);
         addSwing(newSwing);
         setAnalysisResult(newSwing);
     } catch (err: any) {
@@ -146,9 +218,12 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
 
   const handleReset = () => {
     setVideoBlobUrl(null);
+    setVideoBlob(null);
     setAnalysisResult(null);
     setError(null);
     setIsLoading(false);
+    setActualFps(null);
+    setIsSlowMo(false);
     if(videoRef.current) {
         videoRef.current.src = "";
         videoRef.current.srcObject = null;
@@ -157,6 +232,7 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
 
   return (
     <div className="bg-light-gray rounded-lg shadow-xl p-4 md:p-8 w-full max-w-4xl mx-auto flex flex-col gap-6">
+        {showCameraGuide && <CameraAngleGuide onClose={() => setShowCameraGuide(false)} />}
         <div className="text-center">
             <h2 className="text-2xl md:text-3xl font-bold text-golf-sand">Swing Analyzer</h2>
             <p className="text-gray-400 mt-1">Record your swing to get instant AI-powered feedback.</p>
@@ -170,7 +246,10 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
                     <p className="mt-4 text-lg font-semibold text-gray-300">Ready to Record</p>
                     <div className="mt-2 text-sm text-gray-400 max-w-xs bg-dark-charcoal/50 p-3 rounded-lg backdrop-blur-sm">
                         <p className="font-bold text-golf-sand/80">Camera Placement Tip:</p>
-                        <p>For best results, place your camera side-on to your swing path, about 1 meter (waist high) off the ground.</p>
+                        <p>For best results, place your camera side-on ("Face-On") to your swing path.</p>
+                        <button onClick={() => setShowCameraGuide(true)} className="mt-2 text-golf-green-light font-semibold hover:underline">
+                           <InformationCircleIcon /> Why does it matter?
+                        </button>
                     </div>
                 </div>
             )}
@@ -199,6 +278,35 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
                         Start Recording
                     </button>
                 )}
+            </div>
+        )}
+        
+        {videoBlobUrl && !analysisResult && !isLoading && (
+            <div className="flex items-center justify-center gap-6 mt-4 border-t border-gray-700 pt-4">
+                {actualFps && 
+                    <div className="text-sm text-gray-400">
+                        Captured at <span className="font-bold text-golf-sand">{Math.round(actualFps)} FPS</span>
+                    </div>
+                }
+                <div className="flex items-center gap-2">
+                    <label htmlFor="slowMoToggle" className="text-sm text-gray-300 font-semibold">Slow Motion:</label>
+                    <button
+                      id="slowMoToggle"
+                      onClick={() => setIsSlowMo(!isSlowMo)}
+                      className={`relative inline-flex items-center h-6 rounded-full w-11 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-light-gray focus:ring-golf-green ${
+                        isSlowMo ? 'bg-golf-green' : 'bg-gray-600'
+                      }`}
+                      aria-pressed={isSlowMo}
+                      role="switch"
+                    >
+                      <span className="sr-only">Toggle Slow Motion</span>
+                      <span
+                        className={`inline-block w-4 h-4 transform bg-white rounded-full transition-transform ${
+                          isSlowMo ? 'translate-x-6' : 'translate-x-1'
+                        }`}
+                      />
+                    </button>
+                </div>
             </div>
         )}
 

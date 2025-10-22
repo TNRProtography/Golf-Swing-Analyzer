@@ -1,6 +1,7 @@
-
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import type { SwingData } from '../types';
+import { Loader } from './Loader';
+import { getVideo } from '../services/localDBService';
 
 const ClubColors: { [key: string]: string } = {
   'Driver': 'bg-red-500',
@@ -20,9 +21,47 @@ const getClubColor = (club: string) => {
     return ClubColors['Default'];
 }
 
-export const ShotHistoryView: React.FC<{ swings: SwingData[] }> = ({ swings }) => {
+interface ShotHistoryViewProps {
+    swings: SwingData[];
+    isLoading: boolean;
+}
+
+export const ShotHistoryView: React.FC<ShotHistoryViewProps> = ({ swings, isLoading }) => {
     const [selectedSwing, setSelectedSwing] = useState<SwingData | null>(null);
+    const [selectedVideoUrl, setSelectedVideoUrl] = useState<string | null>(null);
     const MAX_DISTANCE = 350; // Max yards for visualization
+
+    useEffect(() => {
+        let objectUrl: string | null = null;
+
+        const loadVideo = async () => {
+            if (selectedSwing) {
+                setSelectedVideoUrl(null);
+                const videoBlob = await getVideo(selectedSwing.id);
+                if (videoBlob) {
+                    objectUrl = URL.createObjectURL(videoBlob);
+                    setSelectedVideoUrl(objectUrl);
+                }
+            }
+        };
+
+        loadVideo();
+
+        return () => {
+            if (objectUrl) {
+                URL.revokeObjectURL(objectUrl);
+            }
+        };
+    }, [selectedSwing]);
+
+
+    if (isLoading) {
+        return (
+            <div className="text-center p-8 bg-light-gray rounded-lg">
+                <Loader message="Loading swing history from cloud..."/>
+            </div>
+        )
+    }
 
     if (swings.length === 0) {
         return (
@@ -87,6 +126,15 @@ export const ShotHistoryView: React.FC<{ swings: SwingData[] }> = ({ swings }) =
                 <div className="text-white">
                     <h3 className="text-xl font-bold text-golf-sand">Shot Details</h3>
                     <p className="text-gray-400 text-sm mb-4">{new Date(selectedSwing.timestamp).toLocaleString()}</p>
+                    
+                    {selectedVideoUrl ? (
+                        <video src={selectedVideoUrl} controls loop className="w-full rounded-lg mb-4 bg-dark-charcoal"></video>
+                    ) : (
+                        <div className="w-full aspect-video bg-dark-charcoal rounded-lg flex items-center justify-center mb-4">
+                            <p className="text-gray-400 text-sm">No video available.</p>
+                        </div>
+                    )}
+
                     <div className="grid grid-cols-2 gap-4">
                         <div className="bg-dark-charcoal p-3 rounded-lg">
                             <p className="text-xs text-gray-400">Club</p>
