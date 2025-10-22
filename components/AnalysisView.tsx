@@ -197,7 +197,14 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
         }
       };
       recorder.start();
+      
+      if (videoContainerRef.current) {
+        videoContainerRef.current.requestFullscreen().catch(err => {
+            console.warn(`Could not automatically enter full-screen mode: ${err.message}`);
+        });
+      }
       setIsRecording(true);
+
     } catch (err) {
       console.error("Error accessing camera:", err);
       setError("Could not access the camera. Please check permissions and try again.");
@@ -205,6 +212,9 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
   };
 
   const stopRecording = () => {
+    if (document.fullscreenElement) {
+        document.exitFullscreen();
+    }
     if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
       mediaRecorderRef.current.stop();
     }
@@ -330,7 +340,19 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
                     </div>
                 </div>
             )}
-            {(isRecording || videoBlobUrl) && (
+            
+            {isRecording && (
+                <button
+                    onClick={stopRecording}
+                    className="absolute bottom-5 left-1/2 -translate-x-1/2 z-20 bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-full flex items-center gap-2 animate-pulse"
+                    aria-label="Stop Recording"
+                >
+                    <span className="w-3 h-3 bg-white rounded-sm"></span>
+                    STOP
+                </button>
+            )}
+
+            {!isRecording && videoBlobUrl && (
                 <button 
                     onClick={toggleFullscreen} 
                     className="absolute bottom-2 right-2 p-2 bg-black/50 rounded-full text-white hover:bg-black/75 transition-colors z-10"
