@@ -3,7 +3,7 @@ import React, { useState, useRef, useCallback, useEffect } from 'react';
 import { ClubSelector } from './ClubSelector';
 import { Loader } from './Loader';
 import { AnalysisResult } from './AnalysisResult';
-import { analyzeSwing, getCoachingTips } from '../services/geminiService';
+import { performSwingAnalysis } from '../services/geminiService';
 import { saveVideo } from '../services/localDBService';
 import type { Club, SwingData, AnalysisResultData } from '../types';
 import { CLUBS } from '../constants';
@@ -191,14 +191,12 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
         const frames = await extractFrames(videoBlobUrl);
         if (frames.length === 0) throw new Error("Could not extract frames from video.");
 
-        const { stats, trajectory, impactFrameIndex } = await analyzeSwing(frames, selectedClub);
-        const impactFrame = frames[impactFrameIndex];
-        const tips = await getCoachingTips(stats, selectedClub, impactFrame);
+        const { stats, trajectory, tips, impactFrameUrl } = await performSwingAnalysis(frames, selectedClub);
         
         const newSwing: SwingData = {
             id: new Date().toISOString(),
             club: selectedClub,
-            impactFrameUrl: impactFrame,
+            impactFrameUrl,
             stats,
             trajectory,
             tips,
