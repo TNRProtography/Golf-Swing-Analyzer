@@ -32,6 +32,12 @@ const ShrinkIcon = () => (
     </svg>
 );
 
+const CheckmarkIcon = () => (
+    <svg xmlns="http://www.w3.org/2000/svg" className="h-20 w-20 text-golf-green-light" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M5 13l4 4L19 7" />
+    </svg>
+);
+
 
 const CameraAngleGuide: React.FC<{ onClose: () => void }> = ({ onClose }) => (
     <div className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 p-4" onClick={onClose}>
@@ -91,35 +97,57 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
   const [videoDevices, setVideoDevices] = useState<MediaDeviceInfo[]>([]);
   const [selectedDeviceId, setSelectedDeviceId] = useState<string | undefined>(undefined);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  
+  const [isCameraOn, setIsCameraOn] = useState(false);
+  const [isBallDetected, setIsBallDetected] = useState(false);
+  const [showTick, setShowTick] = useState(false);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const videoContainerRef = useRef<HTMLDivElement>(null);
+  const detectionCanvasRef = useRef<HTMLCanvasElement>(null);
+  const detectionIntervalRef = useRef<number | null>(null);
 
   useEffect(() => {
-    // This effect runs once to get the list of available video devices.
     const getVideoDevices = async () => {
       try {
-        // We must call getUserMedia to get permission before enumerateDevices can return device labels.
-        // We can create a dummy stream and stop it immediately.
-        const tempStream = await navigator.mediaDevices.getUserMedia({ video: true });
-        tempStream.getTracks().forEach(track => track.stop());
-        
         const devices = await navigator.mediaDevices.enumerateDevices();
         const videoInputs = devices.filter(device => device.kind === 'videoinput');
         setVideoDevices(videoInputs);
         if (videoInputs.length > 0) {
-          // Default to the first available camera.
           setSelectedDeviceId(videoInputs[0].deviceId);
         }
       } catch (err) {
         console.warn("Could not enumerate video devices:", err);
-        // Don't set an error here; it will be handled when the user tries to record.
       }
     };
     getVideoDevices();
   }, []);
+
+  const stopDetection = useCallback(() => {
+    if (detectionIntervalRef.current) {
+      clearInterval(detectionIntervalRef.current);
+      detectionIntervalRef.current = null;
+    }
+  }, []);
+
+  useEffect(() => {
+      return () => {
+          stopDetection();
+          if (streamRef.current) {
+              streamRef.current.getTracks().forEach(track => track.stop());
+          }
+      }
+  }, [stopDetection]);
+
+  useEffect(() => {
+    if (isBallDetected) {
+        setShowTick(true);
+        const timer = setTimeout(() => setShowTick(false), 1500);
+        return () => clearTimeout(timer);
+    }
+  }, [isBallDetected]);
 
   useEffect(() => {
     if (videoRef.current && videoBlobUrl) {
@@ -136,55 +164,98 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
       document.removeEventListener('fullscreenchange', handleFullscreenChange);
     };
   }, []);
+  
+  const detectBall = useCallback(() => {
+    if (!videoRef.current || !detectionCanvasRef.current || videoRef.current.paused || videoRef.current.ended) return;
+    const video = videoRef.current;
+    const canvas = detectionCanvasRef.current;
+    const ctx = canvas.getContext('2d', { willReadFrequently: true });
+    if (!ctx) return;
+  
+    canvas.width = video.videoWidth;
+    canvas.height = video.videoHeight;
+    ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
+  
+    const roi = { x: canvas.width * 0.4, y: canvas.height * 0.75, width: canvas.width * 0.2, height: canvas.height * 0.25 };
+  
+    try {
+      const imageData = ctx.getImageData(roi.x, roi.y, roi.width, roi.height);
+      const data = imageData.data;
+      let whitePixels = 0;
+      const threshold = 220;
+  
+      for (let i = 0; i < data.length; i += 4) {
+        if (data[i] > threshold && data[i + 1] > threshold && data[i + 2] > threshold) {
+          whitePixels++;
+        }
+      }
+      
+      const whitePixelPercentage = (whitePixels / (roi.width * roi.height)) * 100;
+  
+      if (whitePixelPercentage > 1 && whitePixelPercentage < 15) {
+        setIsBallDetected(true);
+        stopDetection();
+      }
+    } catch (e) {
+      console.error("Ball detection failed:", e);
+      stopDetection();
+    }
+  }, [stopDetection]);
+
+  const startDetection = useCallback(() => {
+    stopDetection();
+    detectionIntervalRef.current = window.setInterval(detectBall, 500);
+  }, [detectBall, stopDetection]);
+
+  const startCameraPreview = async () => {
+    handleReset(true);
+    setError(null);
+    try {
+      const frameRateConstraint = isHighFpsRequested ? { ideal: 240, min: 60 } : { ideal: 30 };
+      const constraints: MediaStreamConstraints = { 
+        video: { deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined, frameRate: frameRateConstraint } 
+      };
+      if (typeof constraints.video === 'object' && !constraints.video.deviceId) {
+        constraints.video.facingMode = 'environment';
+      }
+      
+      if (streamRef.current) {
+        streamRef.current.getTracks().forEach(track => track.stop());
+      }
+
+      const stream = await navigator.mediaDevices.getUserMedia(constraints);
+      const videoTrack = stream.getVideoTracks()[0];
+      if (videoTrack) {
+        const settings = videoTrack.getSettings();
+        if (settings.frameRate) setActualFps(settings.frameRate);
+      }
+      streamRef.current = stream;
+      if (videoRef.current) videoRef.current.srcObject = stream;
+      setIsCameraOn(true);
+      startDetection();
+    } catch (err) {
+      console.error("Error accessing camera:", err);
+      setError("Could not access the camera. Please check permissions and try again.");
+      setIsCameraOn(false);
+    }
+  };
 
   const startRecording = async () => {
+    if (!streamRef.current) return;
+    stopDetection();
+    
     setVideoBlobUrl(null);
     setVideoBlob(null);
     setAnalysisResult(null);
     setError(null);
-    setActualFps(null);
     setIsPlaybackSlowed(false);
-
+    
     try {
-      const frameRateConstraint = isHighFpsRequested
-        ? { ideal: 240, min: 60 }
-        : { ideal: 30 };
-
-      const constraints: MediaStreamConstraints = { 
-        video: { 
-          deviceId: selectedDeviceId ? { exact: selectedDeviceId } : undefined,
-          frameRate: frameRateConstraint
-        } 
-      };
-      
-      // Fallback to 'environment' facing mode if no specific device is selected.
-      if (typeof constraints.video === 'object' && !constraints.video.deviceId) {
-        constraints.video.facingMode = 'environment';
-      }
-
-      const stream = await navigator.mediaDevices.getUserMedia(constraints);
-      
-      const videoTrack = stream.getVideoTracks()[0];
-      if (videoTrack) {
-        const settings = videoTrack.getSettings();
-        if (settings.frameRate) {
-            setActualFps(settings.frameRate);
-            console.log(`Camera stream started. Requested FPS: ${JSON.stringify(frameRateConstraint)}, Actual FPS: ${settings.frameRate}`);
-        }
-      }
-
-      streamRef.current = stream;
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream;
-      }
-
-      const recorder = new MediaRecorder(stream, { mimeType: 'video/webm' });
+      const recorder = new MediaRecorder(streamRef.current, { mimeType: 'video/webm' });
       mediaRecorderRef.current = recorder;
       const chunks: Blob[] = [];
       recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) {
-          chunks.push(event.data);
-        }
+        if (event.data.size > 0) chunks.push(event.data);
       };
       recorder.onstop = () => {
         const blob = new Blob(chunks, { type: 'video/webm' });
@@ -197,30 +268,21 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
         }
       };
       recorder.start();
-      
       if (videoContainerRef.current) {
         videoContainerRef.current.requestFullscreen().catch(err => {
-            console.warn(`Could not automatically enter full-screen mode: ${err.message}`);
+            console.warn(`Could not enter full-screen: ${err.message}`);
         });
       }
       setIsRecording(true);
-
     } catch (err) {
-      console.error("Error accessing camera:", err);
-      setError("Could not access the camera. Please check permissions and try again.");
+        console.error("Recording failed to start:", err);
+        setError("Could not start recording.");
     }
   };
 
   const stopRecording = () => {
-    if (document.fullscreenElement) {
-        document.exitFullscreen();
-    }
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state === 'recording') {
-      mediaRecorderRef.current.stop();
-    }
-    if(streamRef.current) {
-        streamRef.current.getTracks().forEach(track => track.stop());
-    }
+    if (document.fullscreenElement) document.exitFullscreen();
+    if (mediaRecorderRef.current?.state === 'recording') mediaRecorderRef.current.stop();
     setIsRecording(false);
   };
   
@@ -229,7 +291,6 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
         const video = document.createElement('video');
         video.src = videoUrl;
         video.muted = true;
-
         const canvas = document.createElement('canvas');
         const context = canvas.getContext('2d');
         const frames: string[] = [];
@@ -256,7 +317,6 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
 
   const handleAnalyze = async () => {
     if (!videoBlobUrl || !videoBlob) return;
-
     setIsLoading(true);
     setError(null);
     setAnalysisResult(null);
@@ -264,55 +324,47 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
     try {
         const frames = await extractFrames(videoBlobUrl);
         if (frames.length === 0) throw new Error("Could not extract frames from video.");
-
         const { stats, trajectory, tips, impactFrameUrl } = await performSwingAnalysis(frames, selectedClub);
-        
         const newSwing: SwingData = {
-            id: new Date().toISOString(),
-            club: selectedClub,
-            impactFrameUrl,
-            stats,
-            trajectory,
-            tips,
-            timestamp: Date.now(),
+            id: new Date().toISOString(), club: selectedClub, impactFrameUrl,
+            stats, trajectory, tips, timestamp: Date.now(),
         };
-        
         await saveVideo(newSwing.id, videoBlob);
         addSwing(newSwing);
         setAnalysisResult(newSwing);
     } catch (err: any) {
-        console.error("Analysis failed:", err);
         setError(`Analysis failed. ${err.message || 'Please try again.'}`);
     } finally {
         setIsLoading(false);
     }
   };
 
-  const handleReset = () => {
+  const handleReset = (silent = false) => {
     setVideoBlobUrl(null);
     setVideoBlob(null);
     setAnalysisResult(null);
-    setError(null);
+    if (!silent) setError(null);
     setIsLoading(false);
     setActualFps(null);
     setIsPlaybackSlowed(false);
+    setIsBallDetected(false);
     if(videoRef.current) {
         videoRef.current.src = "";
-        videoRef.current.srcObject = null;
+        if (streamRef.current && isCameraOn) {
+            videoRef.current.srcObject = streamRef.current;
+        } else {
+             videoRef.current.srcObject = null;
+        }
     }
+    if (!silent && isCameraOn) startDetection();
   }
 
   const toggleFullscreen = () => {
     if (!videoContainerRef.current) return;
-
     if (!document.fullscreenElement) {
-        videoContainerRef.current.requestFullscreen().catch(err => {
-            alert(`Error attempting to enable full-screen mode: ${err.message} (${err.name})`);
-        });
+        videoContainerRef.current.requestFullscreen().catch(err => alert(`Error: ${err.message}`));
     } else {
-        if (document.exitFullscreen) {
-            document.exitFullscreen();
-        }
+        if (document.exitFullscreen) document.exitFullscreen();
     }
   };
 
@@ -327,17 +379,30 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
 
         <div ref={videoContainerRef} className="relative bg-dark-charcoal rounded-lg aspect-video w-full flex items-center justify-center overflow-hidden">
             <video ref={videoRef} className="w-full h-full object-contain" playsInline autoPlay muted loop={!isRecording && !!videoBlobUrl}></video>
-             {!videoBlobUrl && !isRecording && (
+            <canvas ref={detectionCanvasRef} className="hidden" />
+
+             {!isCameraOn && !isRecording && (
                 <div className="absolute flex flex-col items-center text-center p-4">
                     <CameraIcon />
                     <p className="mt-4 text-lg font-semibold text-gray-300">Ready to Record</p>
-                    <div className="mt-2 text-sm text-gray-400 max-w-xs bg-dark-charcoal/50 p-3 rounded-lg backdrop-blur-sm">
-                        <p className="font-bold text-golf-sand/80">Camera Placement Tip:</p>
-                        <p>For best results, place your camera side-on ("Face-On") to your swing path.</p>
-                        <button onClick={() => setShowCameraGuide(true)} className="mt-2 text-golf-green-light font-semibold hover:underline">
-                           <InformationCircleIcon /> Why does it matter?
+                     <div className="mt-2 text-sm text-gray-400 max-w-xs bg-dark-charcoal/50 p-3 rounded-lg backdrop-blur-sm">
+                        <button onClick={() => setShowCameraGuide(true)} className="text-golf-green-light font-semibold hover:underline">
+                           <InformationCircleIcon /> Check Camera Placement Guide
                         </button>
                     </div>
+                </div>
+            )}
+            
+            {isCameraOn && !videoBlobUrl && !isRecording && !isBallDetected && (
+                <div className="absolute bottom-[10%] left-1/2 -translate-x-1/2 flex flex-col items-center pointer-events-none text-center">
+                    <div className="w-10 h-10 border-2 border-dashed border-white/70 rounded-full animate-pulse flex items-center justify-center"></div>
+                    <p className="mt-2 text-white bg-black/50 px-2 py-1 rounded text-sm font-semibold">Place Ball Here</p>
+                </div>
+            )}
+
+            {showTick && (
+                <div className="absolute inset-0 flex items-center justify-center bg-black/40 animate-fade-in-then-out pointer-events-none">
+                    <CheckmarkIcon/>
                 </div>
             )}
             
@@ -366,87 +431,48 @@ export const AnalysisView: React.FC<AnalysisViewProps> = ({ addSwing }) => {
         {error && <div className="text-red-400 bg-red-900/50 p-3 rounded-md text-center">{error}</div>}
 
         {!isLoading && !analysisResult && (
-            isRecording ? (
-                 <button onClick={stopRecording} className="w-full sm:w-auto mx-auto bg-red-600 hover:bg-red-700 text-white font-bold py-3 px-6 rounded-lg transition-colors">
-                    Stop Recording
-                </button>
-            ) : videoBlobUrl ? (
+            isRecording ? null : videoBlobUrl ? (
                 <div className="flex flex-col sm:flex-row items-center justify-center gap-4">
-                    <button onClick={handleAnalyze} className="w-full sm:w-auto bg-golf-green hover:bg-golf-green-light text-white font-bold py-3 px-6 rounded-lg transition-colors">
-                        Analyze Swing
-                    </button>
-                    <button onClick={handleReset} className="w-full sm:w-auto bg-gray-600 hover:bg-gray-700 text-white font-bold py-3 px-6 rounded-lg transition-colors">
-                        Record New
-                    </button>
+                    <button onClick={handleAnalyze} className="w-full sm:w-auto bg-golf-green hover:bg-golf-green-light text-white font-bold py-3 px-6 rounded-lg transition-colors">Analyze Swing</button>
+                    <button onClick={handleReset} className="w-full sm:w-auto bg-gray-600 hover:bg-gray-700 text-white font-bold py-3 px-6 rounded-lg transition-colors">Record New</button>
                 </div>
             ) : (
                 <div className="flex flex-col items-center gap-4">
-                    {/* Pre-recording settings */}
                     <div className="w-full flex flex-col sm:flex-row items-center justify-center gap-4 p-4 bg-dark-charcoal rounded-lg">
                         <ClubSelector selectedClub={selectedClub} onClubChange={setSelectedClub} />
-                        
                         {videoDevices.length > 1 && (
-                            <div className="w-full sm:w-auto">
-                                <select
-                                    value={selectedDeviceId}
-                                    onChange={(e) => setSelectedDeviceId(e.target.value)}
-                                    className="w-full sm:w-auto bg-light-gray border border-gray-600 text-white font-semibold py-3 px-4 rounded-lg focus:outline-none focus:ring-2 focus:ring-golf-green-light"
-                                    aria-label="Select Camera"
-                                >
-                                    {videoDevices.map((device, index) => (
-                                        <option key={device.deviceId} value={device.deviceId}>
-                                            {device.label || `Camera ${index + 1}`}
-                                        </option>
-                                    ))}
-                                </select>
-                            </div>
+                            <select value={selectedDeviceId} onChange={(e) => setSelectedDeviceId(e.target.value)} className="w-full sm:w-auto bg-light-gray border border-gray-600 text-white font-semibold py-3 px-4 rounded-lg focus:outline-none focus:ring-2 focus:ring-golf-green-light" aria-label="Select Camera">
+                                {videoDevices.map((device, index) => <option key={device.deviceId} value={device.deviceId}>{device.label || `Camera ${index + 1}`}</option>)}
+                            </select>
                         )}
-                        
                         <div className="flex items-center gap-2">
-                            <label htmlFor="highFpsToggle" className="text-sm text-gray-300 font-semibold whitespace-nowrap">High FPS (Slow-Mo):</label>
-                            <button
-                                id="highFpsToggle"
-                                onClick={() => setIsHighFpsRequested(!isHighFpsRequested)}
-                                className={`relative inline-flex items-center h-6 rounded-full w-11 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-dark-charcoal focus:ring-golf-green ${isHighFpsRequested ? 'bg-golf-green' : 'bg-gray-600'}`}
-                                role="switch"
-                                aria-checked={isHighFpsRequested}
-                            >
+                            <label htmlFor="highFpsToggle" className="text-sm text-gray-300 font-semibold whitespace-nowrap">High FPS:</label>
+                            <button id="highFpsToggle" onClick={() => setIsHighFpsRequested(!isHighFpsRequested)} className={`relative inline-flex items-center h-6 rounded-full w-11 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-dark-charcoal focus:ring-golf-green ${isHighFpsRequested ? 'bg-golf-green' : 'bg-gray-600'}`} role="switch" aria-checked={isHighFpsRequested}>
                                 <span className={`inline-block w-4 h-4 transform bg-white rounded-full transition-transform ${isHighFpsRequested ? 'translate-x-6' : 'translate-x-1'}`} />
                             </button>
                         </div>
                     </div>
-
-                    <button onClick={startRecording} className="w-full sm:w-auto bg-golf-green-light hover:bg-golf-green text-white font-bold py-3 px-6 rounded-lg transition-colors">
-                        Start Recording
-                    </button>
+                    {isCameraOn ? (
+                        <button onClick={startRecording} disabled={!isBallDetected} className="w-full sm:w-auto bg-golf-green-light hover:bg-golf-green text-white font-bold py-3 px-6 rounded-lg transition-colors disabled:bg-gray-500 disabled:cursor-not-allowed">
+                            {isBallDetected ? 'Start Recording' : 'Waiting for Ball...'}
+                        </button>
+                    ) : (
+                         <button onClick={startCameraPreview} className="w-full sm:w-auto bg-golf-green-light hover:bg-golf-green text-white font-bold py-3 px-6 rounded-lg transition-colors">
+                            Setup Camera & Position Ball
+                        </button>
+                    )}
                 </div>
             )
         )}
         
         {videoBlobUrl && !analysisResult && !isLoading && (
             <div className="flex items-center justify-center gap-6 mt-4 border-t border-gray-700 pt-4">
-                {actualFps && 
-                    <div className="text-sm text-gray-400">
-                        Captured at <span className="font-bold text-golf-sand">{Math.round(actualFps)} FPS</span>
-                    </div>
-                }
+                {actualFps && <div className="text-sm text-gray-400">Captured at <span className="font-bold text-golf-sand">{Math.round(actualFps)} FPS</span></div>}
                 <div className="flex items-center gap-2">
-                    <label htmlFor="playbackSlowMoToggle" className="text-sm text-gray-300 font-semibold">Slow Motion Playback:</label>
-                    <button
-                      id="playbackSlowMoToggle"
-                      onClick={() => setIsPlaybackSlowed(!isPlaybackSlowed)}
-                      className={`relative inline-flex items-center h-6 rounded-full w-11 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-light-gray focus:ring-golf-green ${
-                        isPlaybackSlowed ? 'bg-golf-green' : 'bg-gray-600'
-                      }`}
-                      aria-pressed={isPlaybackSlowed}
-                      role="switch"
-                    >
+                    <label htmlFor="playbackSlowMoToggle" className="text-sm text-gray-300 font-semibold">Slow Motion:</label>
+                    <button id="playbackSlowMoToggle" onClick={() => setIsPlaybackSlowed(!isPlaybackSlowed)} className={`relative inline-flex items-center h-6 rounded-full w-11 transition-colors focus:outline-none focus:ring-2 focus:ring-offset-2 focus:ring-offset-light-gray focus:ring-golf-green ${isPlaybackSlowed ? 'bg-golf-green' : 'bg-gray-600'}`} aria-pressed={isPlaybackSlowed} role="switch">
                       <span className="sr-only">Toggle Slow Motion Playback</span>
-                      <span
-                        className={`inline-block w-4 h-4 transform bg-white rounded-full transition-transform ${
-                          isPlaybackSlowed ? 'translate-x-6' : 'translate-x-1'
-                        }`}
-                      />
+                      <span className={`inline-block w-4 h-4 transform bg-white rounded-full transition-transform ${isPlaybackSlowed ? 'translate-x-6' : 'translate-x-1'}`}/>
                     </button>
                 </div>
             </div>

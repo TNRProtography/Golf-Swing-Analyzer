@@ -22,6 +22,15 @@
               'dark-charcoal': '#1a1a1a',
               'light-gray': '#333333'
             },
+            animation: {
+              'fade-in-then-out': 'fadeInThenOut 1.5s ease-in-out forwards',
+            },
+            keyframes: {
+              fadeInThenOut: {
+                '0%, 100%': { opacity: '0' },
+                '20%, 80%': { opacity: '1' },
+              }
+            }
           },
         },
       }
